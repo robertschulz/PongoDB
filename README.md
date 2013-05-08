@@ -33,3 +33,5 @@ the following sample JSON structure:
 The demo will then loop you through several example
 invocations, showing you the structure both before
 and after the change. Hit enter to continue after each.
+
+If this is at all helpful to you, please feel free to improve this prototype.
