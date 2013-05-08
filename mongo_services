@@ -1,0 +1,273 @@
+#!/usr/bin/perl
+##================================================
+## REST Development construct for PERL <=> MongoDB 
+## TODO: refactor $record_criteria->{'_id'}
+## TODO: GridFS uploads and retrievals!
+##================================================
+use CGI qw/:standard/;
+use JSON::XS;
+use MongoDB;
+use MongoDB::OID;
+use MongoDB::GridFS;
+use MongoDB::GridFS::File;
+use FileHandle;
+use POSIX qw/strftime/;
+use Data::Dumper;
+
+## The Mongo DB Connect:
+my $mongo_database =  param('db') || 'pongo_test';
+my $conn = MongoDB::Connection->new;
+my $db   = $conn->get_database($mongo_database); 
+
+## If you want to see some Apache Debug
+my $debug = 0;
+debug_params() if $debug;
+
+##=======================================================
+## Dispatch REST Accordingly
+##=======================================================
+if    (param('query_collection'))  { &query_collection();  }
+elsif (param('update_collection')) { &update_collection(); }
+elsif (param('remove_collection')) { &remove_collection(); }
+else                               { &default_response(); }
+
+
+
+
+##=======================================================
+## Query any collection
+## /mongo_services?query_collection=encounters
+##                &find={"data.account_number":123456789}
+##
+## /mongo_services?query_collection=encounters
+##                &find={"data.account_number":123456789}
+##                &fields={"data.patient_name":1,"_id":1}
+##
+## /mongo_services?query_collection=encounters
+##                &find={"data.age": {"$gt":50,"$lt":60},"data.gender":"F"}
+##                &fields={"data.patient_name":1,"data.age":1,"data.gender":1}
+##
+## /mongo_services?query_collection=encounters
+##                &find={"data.account_number":123456789}
+##                &fields={"data.workspaces.workspace.type":1}
+##=======================================================
+sub query_collection {
+
+  my $collection_name = param("query_collection");
+  my $record_criteria = param("find") || param("findOne");
+  my $display_fields  = param("fields") || '{}';
+
+
+  ##Convert Json to Perl Data Struct
+  $record_criteria = JSON::XS::decode_json($record_criteria);
+  $display_fields  = JSON::XS::decode_json($display_fields);
+
+  ##suppress OID by default
+  unless ($display_fields->{'_id'}==1){ $display_fields->{'_id'} = 0; }
+
+  ##NOTE! If we didnt already have an $oid object, convert the
+  ##string into an oid using    MongoDB::OID->new(value => $oid)
+  if($record_criteria->{'_id'}){ 
+      my $oid = $record_criteria->{'_id'};
+      $record_criteria->{'_id'} = MongoDB::OID->new(value => $oid);
+  }
+
+  ##Target Desired Collection
+  my $collection;
+  eval {$collection = $db->$collection_name;};
+
+  ##Run the query (find vs find_one ?)
+  my $results = [];
+  my $search;
+  if(param("findOne")){
+    $search = $collection->find_one( $record_criteria, $display_fields );
+    push @$results, $search if $search;
+  }else{
+    $search = $collection->find( $record_criteria );
+    $search->fields($display_fields);
+    while(my $document = $search->next){ push @$results, $document; }
+  }
+
+  ##Render results of update; But for Simplicity of UI use, render
+  ##a single document hash for individual result, array for multiples.
+  if(scalar @$results == 1){ $results = $results->[0]; }
+  my $json = JSON::XS->new->convert_blessed->encode($results);
+  render_response($json,'JSON');
+
+}
+
+
+##=======================================================
+## Update any collection
+## /mongo_services?update_collection=encounters
+##                &find={"data.account_number":123456789}
+##                &action=set
+##                &data.patient_name=New Name
+## 
+## /mongo_services?update_collection=encounters
+##                &find={"data.account_number":123456789}
+##                &action=push
+##                &docs=another_file
+## 
+## /mongo_services?update_collection=encounters
+##                &find={"data.account_number":123456789}
+##                &action=pop
+##                &docs=-1
+##
+## /mongo_services?update_collection=encounters
+##                &find={"data.account_number":123456789}
+##                &action=push
+##                &data.workspaces.0.workspace.facts={"some_code":"v71.9"}
+##
+## /mongo_services?update_collection=encounters
+##                &find={"data.account_number":123456789}
+##                &action=pull
+##                &data.code_set.ICD9.codes={"code": "568.0"}
+##=======================================================
+sub update_collection {
+
+  my $collection_name = param("update_collection");
+  my $record_criteria = param("find");
+  my $update_action   = param("action");
+
+  default_response() unless $update_action=~/\S/;
+  $update_action = lc($update_action); #just in case
+
+  ##Convert Json to Perl Data Struct
+  $record_criteria = JSON::XS::decode_json($record_criteria);
+
+  ##NOTE! If we didnt already have an $oid object, convert the
+  ##string into an oid using    MongoDB::OID->new(value => $oid)
+  if($record_criteria->{'_id'}){ 
+      my $oid = $record_criteria->{'_id'};
+      $record_criteria->{'_id'} = MongoDB::OID->new(value => $oid);
+  }
+ 
+
+  ##Target Desired Collection
+  my $collection;
+  eval {$collection = $db->$collection_name;};
+
+
+  ## Collect the arbitrary json path to update. Ex:
+  ##   data.patient_name=FOO
+  ##   data.workspaces={"some_code":"v71.9"}
+  ## Note If we are pushing a JSON update, decode the url payload;
+  ## Otherwise just set specific value:
+  ## NOTE: allow multiple update clauses
+  my ($attribute,$json,$data_to_update);
+  foreach(param()){ 
+       next if /^(db|update_collection|find|action)/; 
+       $attribute = $_; 
+       $json = param($_);  
+
+       last if($json=~/^[\{\[]/);
+       if($json=~/^\d+$/){$json*=1;}
+       $data_to_update->{$attribute} = $json;
+  }
+
+  my $data_struct;
+  if($json=~/^[\{\[]/){ my $struct = JSON::XS::decode_json($json); $data_struct = {$attribute => $struct};}
+  else                { $data_struct = $data_to_update; }
+  
+  warn "Data Struct\n", Dumper($data_struct), "\n\n" if $debug;
+
+  ## Now Dispatch The Constructed Perl Driver Update!
+  ## Any Mongo Action Available: SET, UNSET, PUSH, POP, etc (see mongo docs)
+  ## TODO: ? articulate {"upsert" => 1, "multiple" => 1}
+  my $update = $collection->update( $record_criteria, 
+                                    {"\$$update_action" => $data_struct},
+                                    {"upsert" => 1}
+                                  );
+
+  ##Render results of update
+  my $json = JSON::XS::encode_json({results=>"$update"});
+  render_response($json,'JSON');
+}
+
+
+
+##=======================================================
+##Remove entire document from any collection
+##=======================================================
+sub remove_collection {
+
+  my $collection_name = param("remove_collection");
+  my $record_criteria = param("find");
+
+  ##Convert Json to Perl Data Struct
+  $record_criteria = JSON::XS::decode_json($record_criteria);
+
+  ##NOTE! If we didnt already have an $oid object, convert the
+  ##string into an oid using    MongoDB::OID->new(value => $oid)
+  if($record_criteria->{'_id'}){ 
+      my $oid = $record_criteria->{'_id'};
+      $record_criteria->{'_id'} = MongoDB::OID->new(value => $oid);
+  }
+
+  ##Target Desired Collection
+  my $collection;
+  eval {$collection = $db->$collection_name;};
+
+  ##Now Dispatch the Remove
+  my $update = $collection->remove( $record_criteria );
+
+  ##Render results of update
+  my $json = JSON::XS::encode_json({results=>"$update"});
+  render_response($json,'JSON');
+}
+
+
+##=======================================================
+## Default Service Response (no params)
+## /mongo_services
+##=======================================================
+sub default_response {
+  
+  my $dump = '';
+  foreach(param()){ $dump .= "$_ => ".param($_)."\n"; }
+  $dump=~s/\n/<br>\n/sg;
+  my $foo = "No Meaningful Params Submitted:";
+  print "content-type: text/html\n\n";
+  print "<u><b>$foo</b></u><br><br>\n$dump<br>\n";
+  exit 0;
+}
+
+
+
+##==================================================
+## NonExposed - Private Supporting Subs Here
+##==================================================
+sub render_response {
+  my $data = shift;
+  my $forced_transport = shift;
+  my $requested_transport = param('as');
+  my $transport_type = $forced_transport || $requested_transport;
+ 
+  if ( $transport_type =~ /html/i){
+   print "content-type: text/html\n\n";
+   print $data;
+  }elsif( $transport_type =~/json/i ){
+   print "content-type: application/json\n\n";
+   print $data;
+  }else{
+   print "content-type: text/html\n\n";
+   print "Please specify a transport_type (html or json)\n";
+  }
+  exit 0;
+}
+
+sub debug_params {
+  warn "===============\n";
+  warn "APACHE PARAMs:\n";
+  foreach(param()){
+    $attribute = $_;
+    $value = param($_);
+    warn "\t$attribute = $value\n";
+  }
+  warn "===============\n";
+}
+
+
+__END__
+http://www.mongodb.org/display/DOCS/SQL+to+Mongo+Mapping+Chart
