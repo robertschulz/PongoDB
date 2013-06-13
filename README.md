@@ -8,8 +8,12 @@ A super lightweight, perl-based rest layer for MongoDB
  
  The goal here was to have something with virtually zero setup, and an API that very closely models the way mongodb is used on the command line. 
  
- For folks who want to immediately start prototyping ideas against MongoDB,
- here is a very simple rest API for development:
+ For folks who want to immediately start prototyping ideas (in Perl) against MongoDB,
+ here is a very simple rest API for development.
+ 
+ Download the archive, extract that, and then cd into that new dir.
+ 
+ Then you can follow these examples:
  
     Start the python test-webserver for this dir (localhost:8080):
      ./python_server
