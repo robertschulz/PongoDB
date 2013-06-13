@@ -4,7 +4,7 @@ PongoDB
 A super lightweight, perl-based rest layer for MongoDB
 
  MongoDB Rocks. But it comes with a read-only webservice.
- There *is* a decent python-based rest layer for mongo, but it is in nacent stages as well.
+ There *is* a decent python-based rest layer for mongo, but it is/was in nacent stages as well.
  
  The goal here was to have something with virtually zero setup, and an API that very closely models the way mongodb is used on the command line. 
  
