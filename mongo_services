@@ -16,7 +16,8 @@ use Data::Dumper;
 
 ## The Mongo DB Connect:
 my $mongo_database =  param('db') || 'pongo_test';
-my $conn = MongoDB::Connection->new;
+#my $conn = MongoDB::Connection->new;
+my $conn     = MongoDB->connect();
 my $db   = $conn->get_database($mongo_database); 
 
 ## If you want to see some Apache Debug
@@ -74,7 +75,7 @@ sub query_collection {
 
   ##Target Desired Collection
   my $collection;
-  eval {$collection = $db->$collection_name;};
+  eval {$collection = $db->get_collection($collection_name);};
 
   ##Run the query (find vs find_one ?)
   my $results = [];
@@ -146,7 +147,7 @@ sub update_collection {
 
   ##Target Desired Collection
   my $collection;
-  eval {$collection = $db->$collection_name;};
+  eval {$collection = $db->get_collection($collection_name);};
 
 
   ## Collect the arbitrary json path to update. Ex:
@@ -207,7 +208,7 @@ sub remove_collection {
 
   ##Target Desired Collection
   my $collection;
-  eval {$collection = $db->$collection_name;};
+  eval {$collection = $db->get_collection($collection_name);};
 
   ##Now Dispatch the Remove
   my $update = $collection->remove( $record_criteria );

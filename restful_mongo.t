@@ -18,7 +18,8 @@ my $mongo_database   = 'pongo_test';
 my $collection_name  = 'documents';
 
 ## The Connect:
-my $conn = MongoDB::Connection->new;
+#my $conn = MongoDB::Connection->new();
+my $conn     = MongoDB->connect();
 my $db   = $conn->get_database($mongo_database); 
 
 ## The Collections:
